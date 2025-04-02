@@ -1,0 +1,1040 @@
+WITH SALES_V2 AS (
+------------------------------------------------------- Info de labels MANUALES y union
+(
+WITH MANUALES AS (
+SELECT
+SHP_LABEL_TRACKING_NUMBER                                           AS SHP_LABEL_ID,
+SHP_LABEL_TRACKING_NUMBER                                           AS SHP_TRACKING_NUMBER,
+NULL                                                                AS GUIA_CON_SEGURO,
+NULL                                                                AS CUS_CUSTOMER_HEAD_ID,
+MC.CUS_CUSTOMER_EMAIL                                               AS CUS_CUSTOMER_HEAD_EMAIL,
+CAR_CARRIER_NAME                                                    AS CAR_CARRIER_NAME,
+'CO'                                                                AS COU_COUNTRY_CODE,
+SHP_SHIPMENT_CREATED_AT_DT                                          AS FECHA_GUIA, -- Fecha creacion de guias MANUALES CO
+CAST(NULL AS STRING)                                                AS DATE_LABEL_HOURS,
+CAST(NULL AS STRING)                                                AS ULTIMA_ACTUALIZACION_CO,
+CAST(NULL AS STRING)                                                AS ULTIMA_ACTUALIZACION_MX,
+'MANUAL'                                                            AS ORIGEN,
+CAST(NULL AS STRING)                                                AS CAR_CARRIER_SERVICE_NAME,
+CASE
+WHEN SHP_SHIPMENT_TOTAL_UNITS IS NULL OR SHP_SHIPMENT_TOTAL_UNITS = 0 THEN 1 ELSE 
+SHP_SHIPMENT_TOTAL_UNITS END                                        AS SHP_SHIPMENT_TOTAL_UNITS
+
+FROM `eblalake.NABU.FT_SHP_MANUAL_SHIPMENTS` MA -- Tabla de envíos manuales.
+LEFT JOIN `eblalake.NABU.LK_CUS_MANUAL_CUSTOMERS` MC -- Unión con la tabla de clientes manuales basada en el número de seguimiento.
+ON MA.SHP_LABEL_TRACKING_NUMBER = MC.SHP_MANUAL_SHIPMENT_ID
+WHERE CAR_CARRIER_OBSERVATION NOT LIKE 'ANULADA'
+--AND SHP_LABEL_TRACKING_NUMBER = '260004199009'
+--ORDER BY SHP_SHIPMENT_CREATED_AT_DTTM DESC
+),
+
+LABELS_UNICOS AS (
+
+SELECT
+MA.SHP_LABEL_ID                                                     AS SHP_LABEL_ID,
+MA.SHP_TRACKING_NUMBER                                              AS SHP_TRACKING_NUMBER,
+MA.GUIA_CON_SEGURO                                                  AS GUIA_CON_SEGURO,
+CH.CUS_CUSTOMER_HEAD_ID                                             AS CUS_CUSTOMER_HEAD_ID,
+MA.CUS_CUSTOMER_HEAD_EMAIL                                          AS CUS_CUSTOMER_HEAD_EMAIL,
+MA.CAR_CARRIER_NAME                                                 AS CAR_CARRIER_NAME,
+MA.COU_COUNTRY_CODE                                                 AS COU_COUNTRY_CODE,
+MA.FECHA_GUIA                                                       AS FECHA_GUIA,
+MA.DATE_LABEL_HOURS                                                 AS DATE_LABEL_HOURS,
+MA.ULTIMA_ACTUALIZACION_CO                                          AS ULTIMA_ACTUALIZACION_CO,
+MA.ULTIMA_ACTUALIZACION_MX                                          AS ULTIMA_ACTUALIZACION_MX,
+MA.ORIGEN                                                           AS ORIGEN,
+MA.CAR_CARRIER_SERVICE_NAME                                         AS CAR_CARRIER_SERVICE_NAME,
+MA.SHP_SHIPMENT_TOTAL_UNITS                                         AS SHP_SHIPMENT_TOTAL_UNITS,
+ROW_NUMBER() OVER (PARTITION BY MA.SHP_TRACKING_NUMBER ORDER BY MA.FECHA_GUIA) AS RN
+
+FROM MANUALES MA
+LEFT JOIN `eblalake.NABU.LK_CUS_CUSTOMER_HEAD` CH
+ON MA.CUS_CUSTOMER_HEAD_EMAIL = CH.CUS_CUSTOMER_HEAD_EMAIL -- Unión con la tabla de clientes basada en el email del cliente.
+)
+
+SELECT
+SHP_LABEL_ID                                                        AS SHP_LABEL_ID,
+SHP_TRACKING_NUMBER                                                 AS SHP_TRACKING_NUMBER,
+GUIA_CON_SEGURO                                                     AS GUIA_CON_SEGURO,
+CUS_CUSTOMER_HEAD_ID                                                AS CUS_CUSTOMER_HEAD_ID,
+CONCAT('SHIPKRAKEN',CUS_CUSTOMER_HEAD_ID)                           AS LLAVE,
+CUS_CUSTOMER_HEAD_EMAIL                                             AS CUS_CUSTOMER_HEAD_EMAIL,
+'SHIPKRAKEN'                                                        AS BU_BUSINESS_TAG_GENERAL,
+'SHIPKRAKEN'                                                        AS BU_BUSINESS_TAG,
+CAR_CARRIER_NAME                                                    AS CAR_CARRIER_NAME,
+COU_COUNTRY_CODE                                                    AS COU_COUNTRY_CODE,
+FECHA_GUIA                                                          AS FECHA_GUIA,
+DATE_LABEL_HOURS                                                    AS DATE_LABEL_HOURS,
+ULTIMA_ACTUALIZACION_CO                                             AS ULTIMA_ACTUALIZACION_CO,
+ULTIMA_ACTUALIZACION_MX                                             AS ULTIMA_ACTUALIZACION_MX,
+ORIGEN                                                              AS ORIGEN,
+CAR_CARRIER_SERVICE_NAME                                            AS CAR_CARRIER_SERVICE_NAME,
+SHP_SHIPMENT_TOTAL_UNITS                                            AS SHP_SHIPMENT_TOTAL_UNITS,
+NULL                                                                AS NET_REVENUE,
+NULL                                                                AS NET_REVENUE_REAL,
+NULL                                                                AS NET_REVENUE_PREDICTIVO,
+NULL                                                                AS NET_REVENUE_SIN_SEGURO,
+
+FROM LABELS_UNICOS
+WHERE RN = 1
+)
+---------------------------------------------------------------------------------------- UNION DE MANUALES A ENVIOS PLATAFORMAS
+UNION ALL
+
+(
+---------------------------------------------------------------------------------------- Info net revenue CO
+WITH NET_REVENUE_CO AS(
+SELECT 
+*
+
+FROM `dev-eblalake-core-analytics.STG.DM_NET_REVENUE_CO`
+),
+
+LABELS_UNICOS AS (
+SELECT
+LB.SHP_LABEL_ID                                                     AS SHP_LABEL_ID,
+LB.SHP_TRACKING_NUMBER                                              AS SHP_TRACKING_NUMBER,
+CASE WHEN LB.SHP_SHIPMENT_INSURANCE_AMOUNT > 1 THEN 1 ELSE 0 END    AS GUIA_CON_SEGURO,
+LB.CUS_CUSTOMER_HEAD_ID                                             AS CUS_CUSTOMER_HEAD_ID,
+CONCAT(LB.BU_BUSINESS_TAG,LB.CUS_CUSTOMER_HEAD_ID)                  AS LLAVE,
+CASE
+WHEN LB.BU_BUSINESS_TAG = 'SKYDROPX_PRO' THEN 'SHIPKRAKEN'
+ELSE LB.BU_BUSINESS_TAG END                                         AS BU_BUSINESS_TAG_GENERAL,
+LB.BU_BUSINESS_TAG                                                  AS BU_BUSINESS_TAG,
+LB.CAR_CARRIER_NAME                                                 AS CAR_CARRIER_NAME,
+LB.COU_COUNTRY_CODE                                                 AS COU_COUNTRY_CODE,
+CASE
+  WHEN LB.COU_COUNTRY_CODE = 'CO' THEN DATE(LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Bogota')
+  WHEN LB.COU_COUNTRY_CODE = 'MX' THEN DATE(LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Mexico_City')
+  ELSE DATE(LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Mexico_City')
+END                                                                 AS DATE_LABEL,
+CASE
+  WHEN LB.COU_COUNTRY_CODE = 'CO' THEN FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S',LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Bogota')
+  WHEN LB.COU_COUNTRY_CODE = 'MX' THEN FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S',LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Mexico_City')
+  ELSE FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S',LB.SHP_LABEL_CREATED_AT_DTTM, 'America/Mexico_City')
+END                                                                 AS DATE_LABEL_HOURS,
+FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S', LB.AUD_UPDATED_DTTM, 'America/Bogota')      AS ULTIMA_ACTUALIZACION_CO,
+FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S', LB.AUD_UPDATED_DTTM, 'America/Mexico_City') AS ULTIMA_ACTUALIZACION_MX,
+'PLATAFORMA'                                                        AS ORIGEN,
+LB.CAR_CARRIER_SERVICE_NAME                                         AS CAR_CARRIER_SERVICE_NAME,
+CASE
+  WHEN SHP_LABEL_NET_REVENUE IS NULL THEN SHP_LABEL_NET_REVENUE_PREDICTION ELSE SHP_LABEL_NET_REVENUE END AS NET_REVENUE,
+1                                                                   AS SHP_SHIPMENT_TOTAL_UNITS,
+SHP_LABEL_NET_REVENUE                                               AS NET_REVENUE_REAL,
+SHP_LABEL_NET_REVENUE_PREDICTION                                    AS NET_REVENUE_PREDICTIVO,
+SHP_LABEL_NET_REVENUE - SHP_SHIPMENT_INSURANCE_AMOUNT               AS NET_REVENUE_SIN_SEGURO,
+ROW_NUMBER() OVER (PARTITION BY LB.SHP_LABEL_ID ORDER BY LB.SHP_LABEL_CREATED_AT_DTTM) AS RN
+
+FROM `eblalake.NABU.FT_SHP_LABELS_BY_BU` LB
+WHERE LB.SHP_LABEL_SUCCESS_FLG
+AND LB.SHP_LABEL_CREATED_AT_DTTM IS NOT NULL
+AND LB.SHP_LABEL_ID IS NOT NULL
+AND SHP_LABEL_SERVICE_BU!='SAAS'
+),
+---------------------------------------------------------------------------------------- INFORMACION CLIENTES
+CLIENTES AS (
+SELECT
+CUS_HEADQUARTER_ID                                                  AS CUS_CUSTOMER_HEAD_ID,
+CONCAT(BU_BUSINESS_TAG,CUS_HEADQUARTER_ID)                          AS LLAVE,
+CUS_HEADQUARTER_TENANT_ID                                           AS CUS_CUSTOMER_HEAD_TENANT_ID,
+CASE
+WHEN CUS_HEADQUARTER_ID = '230724' THEN 'martinvazikhal@gmail.com'
+WHEN CUS_HEADQUARTER_ID = '54214ec5-e0aa-4916-90c4-b188eb06f6c8' THEN 'arzolamty@gmail.com'
+ELSE
+CUS_HEADQUARTER_EMAIL END                                            AS CUS_CUSTOMER_HEAD_EMAIL,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Mexico_City')
+WHEN COU_COUNTRY_CODE = 'CO' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Bogota')  
+WHEN COU_COUNTRY_CODE = 'BR' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Sao_Paulo') 
+ELSE DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Mexico_City') END AS CUS_CUSTOMER_HEAD_CREATED_AT_DTTM,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Mexico_City')
+WHEN COU_COUNTRY_CODE = 'CO' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Bogota')  
+WHEN COU_COUNTRY_CODE = 'BR' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Sao_Paulo') 
+ELSE DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Mexico_City') END AS CUS_ACCOUNT_FIRST_TRANSACTION_DT,
+FROM `eblalake-core-analytics.STG.DIM_CUS_HEADQUARTER`
+WHERE CUS_HEADQUARTER_EMAIL IS NOT NULL
+),
+---------------------------------------------------------------------------------------- CONEXION ENVIOS CON CLIENTES
+LABELS_AND_CUSTOMERS AS (
+SELECT
+L.SHP_LABEL_ID                                                      AS SHP_LABEL_ID,
+L.SHP_TRACKING_NUMBER                                               AS SHP_TRACKING_NUMBER,
+GUIA_CON_SEGURO                                                     AS GUIA_CON_SEGURO,
+CASE
+WHEN L.COU_COUNTRY_CODE = 'BR' THEN NULL ELSE
+L.CUS_CUSTOMER_HEAD_ID END                                          AS CUS_CUSTOMER_HEAD_ID,
+CONCAT(L.BU_BUSINESS_TAG,L.CUS_CUSTOMER_HEAD_ID)                    AS LLAVE,
+C.CUS_CUSTOMER_HEAD_EMAIL                                           AS CUS_CUSTOMER_HEAD_EMAIL,
+BU_BUSINESS_TAG_GENERAL                                             AS BU_BUSINESS_TAG_GENERAL,
+L.BU_BUSINESS_TAG                                                   AS BU_BUSINESS_TAG,
+UPPER(CAR_CARRIER_NAME)                                             AS CAR_CARRIER_NAME,
+L.COU_COUNTRY_CODE                                                  AS COU_COUNTRY_CODE, 
+DATE_LABEL                                                          AS DATE_LABEL,
+DATE_LABEL_HOURS                                                    AS DATE_LABEL_HOURS,
+ULTIMA_ACTUALIZACION_CO                                             AS ULTIMA_ACTUALIZACION_CO,
+ULTIMA_ACTUALIZACION_MX                                             AS ULTIMA_ACTUALIZACION_MX,
+ORIGEN                                                              AS ORIGEN,
+CAR_CARRIER_SERVICE_NAME                                            AS CAR_CARRIER_SERVICE_NAME,
+SHP_SHIPMENT_TOTAL_UNITS                                            AS SHP_SHIPMENT_TOTAL_UNITS,
+CASE
+ WHEN L.COU_COUNTRY_CODE = 'MX' THEN NET_REVENUE
+ WHEN L.COU_COUNTRY_CODE = 'CO' THEN LABEL_NET_REVENUE
+ ELSE NET_REVENUE END                                               AS NET_REVENUE,
+NET_REVENUE_REAL                                                    AS NET_REVENUE_REAL,
+NET_REVENUE_PREDICTIVO                                              AS NET_REVENUE_PREDICTIVO,
+NET_REVENUE_SIN_SEGURO                                              AS NET_REVENUE_SIN_SEGURO,
+
+FROM LABELS_UNICOS L
+LEFT JOIN CLIENTES C
+ON L.LLAVE = C.LLAVE
+LEFT JOIN NET_REVENUE_CO NT
+ON L.SHP_LABEL_ID = NT.SHP_LABEL_ID
+--WHERE RN = 1
+)
+
+SELECT
+*,
+FROM LABELS_AND_CUSTOMERS
+WHERE (CUS_CUSTOMER_HEAD_EMAIL NOT LIKE '%@skydropx.com' AND CUS_CUSTOMER_HEAD_EMAIL NOT LIKE '%@soloenvios.com') 
+OR CUS_CUSTOMER_HEAD_EMAIL IS NULL
+)
+),
+
+TODOS_LOS_CLIENTES AS (
+SELECT 
+CONCAT(BU_BUSINESS_TAG,CUS_HEADQUARTER_ID)                          AS LLAVE,
+FROM `eblalake-core-analytics.STG.DIM_CUS_HEADQUARTER`
+WHERE CUS_HEADQUARTER_EMAIL IS NOT NULL
+GROUP BY 1
+),
+----------------------------------------------------------------------------------------- CLIENTES CON FECHAS DE CUENTA Y DEPOSITO
+CUENTAS AS (
+SELECT
+CUS_HEADQUARTER_ID                                                  AS CUS_CUSTOMER_HEAD_ID,
+CONCAT(BU_BUSINESS_TAG,CUS_HEADQUARTER_ID)                          AS LLAVE,
+BU_BUSINESS_TAG                                                     AS BU_BUSINESS_TAG,
+COU_COUNTRY_CODE                                                    AS COU_COUNTRY_CODE,
+CUS_HEADQUARTER_TENANT_ID                                           AS CUS_CUSTOMER_HEAD_TENANT_ID,
+CASE
+WHEN CUS_HEADQUARTER_ID = '230724' THEN 'martinvazikhal@gmail.com'
+WHEN CUS_HEADQUARTER_ID = '54214ec5-e0aa-4916-90c4-b188eb06f6c8' THEN 'arzolamty@gmail.com'
+ELSE
+CUS_HEADQUARTER_EMAIL END                                            AS CUS_CUSTOMER_HEAD_EMAIL,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Mexico_City')
+WHEN COU_COUNTRY_CODE = 'CO' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Bogota')  
+WHEN COU_COUNTRY_CODE = 'BR' THEN DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Sao_Paulo') 
+ELSE DATE(CUS_HEADQUARTER_CREATED_AT_DTTM,'America/Mexico_City') END AS FECHA_CREACION_CUENTA,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Mexico_City')
+WHEN COU_COUNTRY_CODE = 'CO' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Bogota')  
+WHEN COU_COUNTRY_CODE = 'BR' THEN DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Sao_Paulo') 
+ELSE DATE(BOO_FIRST_BOOKING_CREATED_AT_DTTM,'America/Mexico_City') END AS FECHA_PRIMER_DEPOSITO,
+FROM `eblalake-core-analytics.STG.DIM_CUS_HEADQUARTER`
+WHERE CUS_HEADQUARTER_EMAIL IS NOT NULL
+),
+----------------------------------------------------------------------------------------- SUBCONSULTA PRINCIPAL
+DATOS_PRINCIPALES AS (
+SELECT
+S.SHP_LABEL_ID                                                      AS SHP_LABEL_ID,
+S.SHP_TRACKING_NUMBER                                               AS SHP_TRACKING_NUMBER,
+S.CAR_CARRIER_NAME                                                  AS CAR_CARRIER_NAME,
+S.CAR_CARRIER_SERVICE_NAME                                          AS CAR_CARRIER_SERVICE_NAME,
+S.SHP_SHIPMENT_TOTAL_UNITS                                          AS SHP_SHIPMENT_TOTAL_UNITS,
+S.NET_REVENUE                                                       AS NET_REVENUE,
+NET_REVENUE_REAL                                                    AS NET_REVENUE_REAL,
+NET_REVENUE_PREDICTIVO                                              AS NET_REVENUE_PREDICTIVO,
+NET_REVENUE_SIN_SEGURO                                              AS NET_REVENUE_SIN_SEGURO,
+S.FECHA_GUIA                                                        AS FECHA_GUIA,
+S.ORIGEN                                                            AS ORIGEN,
+S.GUIA_CON_SEGURO                                                   AS GUIA_CON_SEGURO,
+C.CUS_CUSTOMER_HEAD_ID                                              AS CUS_CUSTOMER_HEAD_ID,
+CASE
+WHEN C.CUS_CUSTOMER_HEAD_EMAIL IS NULL THEN 'No registrado en Hubspot' ELSE
+C.CUS_CUSTOMER_HEAD_EMAIL END                                       AS CUS_CUSTOMER_HEAD_EMAIL,
+C.BU_BUSINESS_TAG                                                   AS BU_BUSINESS_TAG,
+CASE
+WHEN S.BU_BUSINESS_TAG_GENERAL IS NULL THEN C.BU_BUSINESS_TAG ELSE
+S.BU_BUSINESS_TAG_GENERAL END                                       AS BU_BUSINESS_TAG_GENERAL,
+CASE
+WHEN S.COU_COUNTRY_CODE IS NULL THEN C.COU_COUNTRY_CODE ELSE S.COU_COUNTRY_CODE END AS COU_COUNTRY_CODE,
+S.ULTIMA_ACTUALIZACION_CO                                           AS ULTIMA_ACTUALIZACION_CO,
+S.ULTIMA_ACTUALIZACION_MX                                           AS ULTIMA_ACTUALIZACION_MX,
+-- Cambios de fecha de primer envio autorizados por Mafe
+CASE
+WHEN C.CUS_CUSTOMER_HEAD_EMAIL = 'atencion.partnershop@gmail.com' AND C.BU_BUSINESS_TAG = 'SHIPKRAKEN' THEN '2025-02-27' 
+WHEN C.CUS_CUSTOMER_HEAD_EMAIL = 'info@ecommercefactory.co' AND C.BU_BUSINESS_TAG = 'SHIPKRAKEN'THEN '2025-02-25'
+WHEN C.CUS_CUSTOMER_HEAD_EMAIL = 'libiac1214@gmail.com' AND C.BU_BUSINESS_TAG = 'SHIPKRAKEN'THEN '2025-03-06'
+WHEN C.CUS_CUSTOMER_HEAD_EMAIL = 'angela.ocampo.vela@gmail.com' AND C.BU_BUSINESS_TAG = 'SHIPKRAKEN'THEN '2025-02-28'
+ELSE
+MIN(S.FECHA_GUIA) OVER (
+PARTITION BY S.CUS_CUSTOMER_HEAD_EMAIL, S.BU_BUSINESS_TAG_GENERAL
+)  END                                                              AS PRIMER_ENVIO_POR_NEGOCIO_GENERAL,
+MIN(S.FECHA_GUIA) OVER (
+PARTITION BY S.CUS_CUSTOMER_HEAD_EMAIL, S.BU_BUSINESS_TAG
+)                                                                   AS PRIMER_ENVIO_POR_NEGOCIO,
+MAX(S.FECHA_GUIA) OVER (
+PARTITION BY S.CUS_CUSTOMER_HEAD_EMAIL, S.BU_BUSINESS_TAG
+)                                                                   AS ULTIMO_ENVIO_POR_NEGOCIO,
+MAX(S.FECHA_GUIA) OVER (
+PARTITION BY S.CUS_CUSTOMER_HEAD_EMAIL, S.BU_BUSINESS_TAG_GENERAL
+)                                                                   AS ULTIMO_ENVIO_POR_NEGOCIO_GENERAL,
+MIN(C.FECHA_CREACION_CUENTA) OVER (
+PARTITION BY C.CUS_CUSTOMER_HEAD_ID, C.BU_BUSINESS_TAG
+)                                                                   AS FECHA_CREACION_CUENTA,
+MIN(C.FECHA_PRIMER_DEPOSITO) OVER (
+PARTITION BY C.CUS_CUSTOMER_HEAD_ID, C.BU_BUSINESS_TAG
+)                                                                   AS FECHA_PRIMER_DEPOSITO
+
+FROM TODOS_LOS_CLIENTES TC
+FULL JOIN SALES_V2 S
+ON TC.LLAVE = S.LLAVE
+FULL JOIN CUENTAS C
+ON TC.LLAVE = C.LLAVE
+ORDER BY S.FECHA_GUIA DESC
+),
+----------------------------------------------------------------------------------------- CALCULA EL PRIMER ENVIO ENTRE TODAS LAS PLATAFORMAS
+PRIMER_ENVIO_GENERAL AS (
+SELECT
+DISTINCT CUS_CUSTOMER_HEAD_EMAIL                                    AS CUS_CUSTOMER_HEAD_EMAIL,
+MIN(FECHA_GUIA)                                                     AS PRIMER_ENVIO
+FROM SALES_V2
+GROUP BY 1
+),
+-----------------------------------------------------------------------------------------SUBCONSULTA DE REACTIVADOS
+REACTIVADOS_SKYDROPX AS(
+WITH cte AS (
+SELECT 
+CUS_CUSTOMER_HEAD_EMAIL                                             AS CUS_CUSTOMER_HEAD_EMAIL,
+'SHIPKRAKEN'                                                        AS BU_BUSINESS_TAG,
+CONCAT(CUS_CUSTOMER_HEAD_EMAIL, 'SHIPKRAKEN')                       AS LLAVE,
+CRM_HUBSPOT_OWNER_EMAIL                                             AS CRM_HUBSPOT_OWNER_EMAIL,
+CRM_HUBSPOT_OWNER_TEAMS                                             AS CRM_HUBSPOT_OWNER_TEAMS,
+FIRST_LABEL_REACTIVATED                                             AS FIRST_LABEL_REACTIVATED,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                               AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+CRM_HUBSPOT_PIPELINE_LABEL                                          AS CRM_HUBSPOT_PIPELINE_LABEL,
+COHORT_RECUPERADO                                                   AS COHORT_RECUPERADO,
+ENVIOS_30_DAY_RECUPERADOS                                           AS ENVIOS_30_DAY_RECUPERADOS,
+ROW_NUMBER() OVER (
+PARTITION BY CUS_CUSTOMER_HEAD_EMAIL 
+ORDER BY FIRST_LABEL_REACTIVATED DESC) AS rn
+
+FROM `dev-eblalake-core-analytics.STG.DM_REACTIVADOS_RECUPERADOS_MX`
+WHERE FIRST_LABEL_REACTIVATED IS NOT NULL
+)
+
+SELECT 
+CUS_CUSTOMER_HEAD_EMAIL                                             AS CUS_CUSTOMER_HEAD_EMAIL,
+BU_BUSINESS_TAG                                                     AS BU_BUSINESS_TAG,
+LLAVE                                                               AS LLAVE,
+CRM_HUBSPOT_OWNER_EMAIL                                             AS CRM_HUBSPOT_OWNER_EMAIL,
+CRM_HUBSPOT_OWNER_TEAMS                                             AS CRM_HUBSPOT_OWNER_TEAMS,
+FIRST_LABEL_REACTIVATED                                             AS PRIMER_ENVIO_REACTIVADO,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                               AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+CRM_HUBSPOT_PIPELINE_LABEL                                          AS CRM_HUBSPOT_PIPELINE_LABEL,
+COHORT_RECUPERADO                                                   AS COHORT_RECUPERADO,
+ENVIOS_30_DAY_RECUPERADOS                                           AS ENVIOS_30_DAY_RECUPERADOS,
+
+FROM cte
+WHERE rn = 1
+
+-----------------------------------------------------------------------------------------SUBCONSULTA DE REACTIVADOS CO
+UNION ALL
+(
+WITH FECHA_REACTIVACION AS (
+SELECT
+DISTINCT CRM_HUBSPOT_CONTACT_EMAIL                                  AS CRM_HUBSPOT_CONTACT_EMAIL,
+MAX(CRM_HUBSPOT_CONTACT_REACTIVATED_DT)                             AS CRM_HUBSPOT_CONTACT_REACTIVATED_DTTM
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_CONTACTS`
+WHERE CRM_HUBSPOT_CONTACT_REACTIVATED_DT IS NOT NULL
+---WHERE CRM_HUBSPOT_CONTACT_EMAIL = 'shaxdres@gmail.com'
+GROUP BY 1
+)
+
+
+SELECT
+DISTINCT MT.CUS_HEADQUARTER_EMAIL                                   AS CUS_CUSTOMER_HEAD_EMAIL,
+MT.BU_BUSINESS_TAG                                                  AS BU_BUSINESS_TAG,
+CONCAT(MT.CUS_HEADQUARTER_EMAIL,MT.BU_BUSINESS_TAG)                 AS LLAVE,
+CAST(NULL AS STRING)                                                AS CRM_HUBSPOT_OWNER_EMAIL,
+CAST(NULL AS STRING)                                                AS CRM_HUBSPOT_OWNER_TEAMS,
+MIN(DATE_LABEL)                                                     AS PRIMER_ENVIO_REACTIVADO, -- Fecha primer envio recativado CO
+'Reactivado'                                                        AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+CAST(NULL AS STRING)                                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+NULL                                                                AS COHORT_RECUPERADO,
+NULL                                                                AS ENVIOS_30_DAY_RECUPERADOS,
+
+FROM `eblalake-core-analytics.STG.DIM_CUS_HEADQUARTER`     MT
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_CONTACTS` CT
+ON MT.CUS_HEADQUARTER_EMAIL = CT.CRM_HUBSPOT_CONTACT_EMAIL
+LEFT JOIN `dev-eblalake-core-analytics.STG.DM_LABELS_WITH_MANUALS_BY_BU` LB 
+ON CONCAT(LB.CUS_CUSTOMER_HEAD_ID,LB.BU_BUSINESS_TAG) = CONCAT(MT.CUS_HEADQUARTER_ID,MT.BU_BUSINESS_TAG)
+LEFT JOIN FECHA_REACTIVACION FR
+ON CT.CRM_HUBSPOT_CONTACT_EMAIL = FR.CRM_HUBSPOT_CONTACT_EMAIL
+WHERE MT.COU_COUNTRY_CODE = 'CO'
+AND CRM_HUBSPOT_CONTACT_REACTIVATED_DT IS NOT NULL
+AND DATE_LABEL >= FR.CRM_HUBSPOT_CONTACT_REACTIVATED_DTTM
+--AND MT.CUS_HEADQUARTER_EMAIL = 'shaxdres@gmail.com'
+GROUP BY 1,2
+)
+),
+----------------------------------------------------------------------------------------- SUBCONSULTA QUE INDICA CLIENTES EN BLACKLIST POR EMAIL
+BLACKLIST AS (
+SELECT 
+CUS_HEADQUARTER_ID                                                  AS CUS_CUSTOMER_HEAD_EMAIL,
+CONCAT(BU_BUSINESS_TAG,CUS_HEADQUARTER_ID)                          AS LLAVE,
+CUS_HEADQUARTER_BLACKLIST_FLG                                       AS BLACKLIST
+FROM `eblalake-core-analytics.STG.DIM_CUS_HEADQUARTER` CH
+),
+----------------------------------------------------------------------------------------- SUBCONSULTA OKRS VENTAS
+PRIMEROS_DATOS_VENTAS AS (
+SELECT
+D.*,
+1 * SHP_SHIPMENT_TOTAL_UNITS                                        AS ENVIO, 
+PG.PRIMER_ENVIO                                                     AS PRIMER_ENVIO,
+R.PRIMER_ENVIO_REACTIVADO                                           AS PRIMER_ENVIO_REACTIVADO,
+CASE
+WHEN R.CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL = 'Recuperado' THEN 'Recuperado'
+WHEN R.CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL = 'Reactivado' THEN 'Reactivado'
+ELSE 'Cliente nuevo' END                                            AS TIPO_DE_CLIENTE,
+CASE
+WHEN R.PRIMER_ENVIO_REACTIVADO IS NOT NULL THEN R.PRIMER_ENVIO_REACTIVADO ELSE PRIMER_ENVIO_POR_NEGOCIO_GENERAL END AS PRIMER_ENVIO_VENTAS_GENERAL,
+CASE
+WHEN R.PRIMER_ENVIO_REACTIVADO IS NOT NULL THEN R.PRIMER_ENVIO_REACTIVADO ELSE PRIMER_ENVIO_POR_NEGOCIO END AS PRIMER_ENVIO_VENTAS_NEGOCIO,
+IF(D.FECHA_GUIA BETWEEN PG.PRIMER_ENVIO AND LAST_DAY(PG.PRIMER_ENVIO), 1 * SHP_SHIPMENT_TOTAL_UNITS , 0)            AS ENVIO_COHORT_GENERAL, --51.Se valida si el envio es envio nuevo entre todos los envios de todas las plataformas
+IF(D.FECHA_GUIA BETWEEN D.PRIMER_ENVIO_POR_NEGOCIO_GENERAL AND LAST_DAY(D.PRIMER_ENVIO_POR_NEGOCIO_GENERAL), 1 * SHP_SHIPMENT_TOTAL_UNITS , 0)            AS ENVIO_COHORT, --51.Se valida si el envio es envio nuevo entre todos los envios de todas las plataformas
+IF(D.FECHA_GUIA BETWEEN D.PRIMER_ENVIO_POR_NEGOCIO AND LAST_DAY(D.PRIMER_ENVIO_POR_NEGOCIO), 1 * SHP_SHIPMENT_TOTAL_UNITS , 0)     AS ENVIO_COHORT_BU, --Se valida si el envio es envio nuevo por cada plataforma
+DATE_ADD(CASE
+WHEN R.PRIMER_ENVIO_REACTIVADO IS NOT NULL THEN R.PRIMER_ENVIO_REACTIVADO ELSE PRIMER_ENVIO_POR_NEGOCIO_GENERAL END, INTERVAL 29 DAY)                          AS FIN_30_DIAS_GENERAL, -- Se genera fecha en que termina los 30 dias por cada cliente general
+DATE_ADD(D.PRIMER_ENVIO_POR_NEGOCIO, INTERVAL 29 DAY)               AS FIN_30_DIAS, -- Se genera fecha en que termina los 30 dias por cada cliente general
+DATE_ADD(D.PRIMER_ENVIO_POR_NEGOCIO_GENERAL, INTERVAL 29 DAY)       AS FIN_30_DIAS_BU, -- Se genera fecha en que termina los 30 dias por cada cliente general
+CASE
+WHEN D.FECHA_GUIA < PG.PRIMER_ENVIO THEN 0
+WHEN D.FECHA_GUIA < DATE_ADD (PG.PRIMER_ENVIO, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END       AS ENVIOS_30_DIAS_GENERAL, -- Se valida si el envio es de 30 dias de todas las plataformas
+CASE
+WHEN D.FECHA_GUIA < D.PRIMER_ENVIO_POR_NEGOCIO THEN 0
+WHEN D.FECHA_GUIA < DATE_ADD (D.PRIMER_ENVIO_POR_NEGOCIO, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END       AS ENVIOS_30_DIAS, -- Se valida si el envio es de 30 dias de todas las plataformas
+CASE
+WHEN D.FECHA_GUIA < D.PRIMER_ENVIO_POR_NEGOCIO_GENERAL THEN 0
+WHEN D.FECHA_GUIA < DATE_ADD (D.PRIMER_ENVIO_POR_NEGOCIO_GENERAL, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END       AS ENVIOS_30_DIAS_BU, -- Se valida si el envio es de 30 dias de todas las plataformas
+B.BLACKLIST
+
+
+FROM DATOS_PRINCIPALES D
+LEFT JOIN PRIMER_ENVIO_GENERAL PG
+ON D.CUS_CUSTOMER_HEAD_EMAIL = PG.CUS_CUSTOMER_HEAD_EMAIL
+LEFT JOIN REACTIVADOS_SKYDROPX R
+ON CONCAT(D.CUS_CUSTOMER_HEAD_EMAIL,D.BU_BUSINESS_TAG_GENERAL) = R.LLAVE
+LEFT JOIN BLACKLIST B
+ON CONCAT(D.BU_BUSINESS_TAG,D.CUS_CUSTOMER_HEAD_ID) = B.LLAVE
+),
+----------------------------------------------------------------------------------------- UNIONES PARA TOMAR COMERCIAL POR CADA NEGOCIO
+COMERCIAL AS (
+(
+
+WITH NEGOCIOS AS (
+SELECT
+DE.CRM_HUBSPOT_DEAL_EMAIL                                 AS CUS_CUSTOMER_HEAD_EMAIL,
+DATE(CRM_HUBSPOT_DEAL_CREATE_DTTM,'America/Sao_Paulo')    AS FECHA_CREACION,
+DATE(CRM_HUBSPOT_DEAL_CLOSE_DTTM,'America/Sao_Paulo')     AS FECHA_CIERRE,
+CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND                         AS INBOUND_OUTBOUND,
+CRM_HUBSPOT_PIPELINE_LABEL                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                     AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                AS CRM_HUBSPOT_OWNER_EMAIL,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                            AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                     AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+CONCAT(DE.CRM_HUBSPOT_DEAL_EMAIL,'FRENET')                AS LLAVE,
+ROW_NUMBER() OVER (PARTITION BY DE.CRM_HUBSPOT_DEAL_EMAIL ORDER BY DE.CRM_HUBSPOT_DEAL_CREATE_DTTM DESC) AS row_num
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW ON DE.CRM_HUBSPOT_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINES` PI ON DE.CRM_HUBSPOT_PIPELINE_ID = PI.CRM_HUBSPOT_PIPELINE_ID
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINE_STAGE` PS ON DE.CRM_HUBSPOT_PIPELINE_STAGE_ID = PS.CRM_HUBSPOT_PIPELINE_STAGE_ID
+WHERE CRM_HUBSPOT_PIPELINE_LABEL = 'Frenet Ventas'
+AND CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL IN ('Cliente com depósito','Cliente com frete')
+)
+SELECT
+*
+FROM NEGOCIOS
+WHERE row_num = 1
+)
+
+UNION ALL
+
+(
+WITH NEGOCIOS AS (
+SELECT
+DE.CRM_HUBSPOT_DEAL_EMAIL                                 AS CUS_CUSTOMER_HEAD_EMAIL,
+DATE(CRM_HUBSPOT_DEAL_CREATE_DTTM,'America/Mexico_City')  AS FECHA_CREACION,
+DATE(CRM_HUBSPOT_DEAL_CLOSE_DTTM,'America/Mexico_City')   AS FECHA_CIERRE,
+CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND                         AS INBOUND_OUTBOUND,
+CRM_HUBSPOT_PIPELINE_LABEL                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                     AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                AS CRM_HUBSPOT_OWNER_EMAIL,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                            AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                     AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+CONCAT(DE.CRM_HUBSPOT_DEAL_EMAIL,'ENVIOS_INTERNACIONALES')AS LLAVE,
+ROW_NUMBER() OVER (PARTITION BY DE.CRM_HUBSPOT_DEAL_EMAIL ORDER BY DE.CRM_HUBSPOT_DEAL_CREATE_DTTM DESC) AS row_num
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW ON DE.CRM_HUBSPOT_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINES` PI ON DE.CRM_HUBSPOT_PIPELINE_ID = PI.CRM_HUBSPOT_PIPELINE_ID
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINE_STAGE` PS ON DE.CRM_HUBSPOT_PIPELINE_STAGE_ID = PS.CRM_HUBSPOT_PIPELINE_STAGE_ID
+WHERE CRM_HUBSPOT_PIPELINE_LABEL = 'Envíos Internacionales'
+AND CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL IN ('Cliente Activo','Ganado','Cliente con envío','Cliente con envío','Reactivado, Recuperado','Cliente con Depósito','Oportunidad con depósito')
+)
+SELECT
+*
+FROM NEGOCIOS
+WHERE row_num = 1
+)
+
+UNION ALL
+
+(
+WITH NEGOCIOS AS (
+SELECT
+DE.CRM_HUBSPOT_DEAL_EMAIL                                 AS CUS_CUSTOMER_HEAD_EMAIL,
+DATE(CRM_HUBSPOT_DEAL_CREATE_DTTM,'America/Mexico_City')  AS FECHA_CREACION,
+DATE(CRM_HUBSPOT_DEAL_CLOSE_DTTM,'America/Mexico_City')   AS FECHA_CIERRE,
+CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND                         AS INBOUND_OUTBOUND,
+CRM_HUBSPOT_PIPELINE_LABEL                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                     AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                AS CRM_HUBSPOT_OWNER_EMAIL,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                            AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                     AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+CONCAT(DE.CRM_HUBSPOT_DEAL_EMAIL,'SOLO_ENVIOS')           AS LLAVE,
+ROW_NUMBER() OVER (PARTITION BY DE.CRM_HUBSPOT_DEAL_EMAIL ORDER BY DE.CRM_HUBSPOT_DEAL_CREATE_DTTM DESC) AS row_num
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW ON DE.CRM_HUBSPOT_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINES` PI ON DE.CRM_HUBSPOT_PIPELINE_ID = PI.CRM_HUBSPOT_PIPELINE_ID
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINE_STAGE` PS ON DE.CRM_HUBSPOT_PIPELINE_STAGE_ID = PS.CRM_HUBSPOT_PIPELINE_STAGE_ID
+WHERE CRM_HUBSPOT_PIPELINE_LABEL IN ('Soloenvíos','Solo Envíos Reactivación')
+AND CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL IN ('Cliente con Envío','Oportunidad con Depósito','Cliente con Depósito','Cliente con Envío')
+)
+SELECT
+*
+FROM NEGOCIOS
+WHERE row_num = 1
+)
+
+UNION ALL
+
+(
+WITH NEGOCIOS AS (
+SELECT
+DE.CRM_HUBSPOT_DEAL_EMAIL                                 AS CUS_CUSTOMER_HEAD_EMAIL,
+DATE(CRM_HUBSPOT_DEAL_CREATE_DTTM,'America/Mexico_City')  AS FECHA_CREACION,
+DATE(CRM_HUBSPOT_DEAL_CLOSE_DTTM,'America/Mexico_City')   AS FECHA_CIERRE,
+CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND                         AS INBOUND_OUTBOUND,
+CRM_HUBSPOT_PIPELINE_LABEL                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                     AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                AS CRM_HUBSPOT_OWNER_EMAIL,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                            AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                     AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+CONCAT(DE.CRM_HUBSPOT_DEAL_EMAIL,'SHIPKRAKEN')            AS LLAVE,
+ROW_NUMBER() OVER (PARTITION BY DE.CRM_HUBSPOT_DEAL_EMAIL ORDER BY DE.CRM_HUBSPOT_DEAL_CREATE_DTTM DESC) AS row_num
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW ON DE.CRM_HUBSPOT_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINES` PI ON DE.CRM_HUBSPOT_PIPELINE_ID = PI.CRM_HUBSPOT_PIPELINE_ID
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINE_STAGE` PS ON DE.CRM_HUBSPOT_PIPELINE_STAGE_ID = PS.CRM_HUBSPOT_PIPELINE_STAGE_ID
+WHERE CRM_HUBSPOT_PIPELINE_LABEL = 'MX Ventas'
+AND CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL IN ('Cliente Activo','Ganado','Cliente con envío','Cliente con envío','Reactivado, Recuperado','Cliente con Depósito','Oportunidad con Depósito','Oportunidad con depósito')
+)
+SELECT
+*
+FROM NEGOCIOS
+WHERE row_num = 1
+)
+
+UNION ALL
+
+(
+WITH NEGOCIOS AS (
+SELECT
+DE.CRM_HUBSPOT_DEAL_EMAIL                                 AS CUS_CUSTOMER_HEAD_EMAIL,
+DATE(CRM_HUBSPOT_DEAL_CREATE_DTTM,'America/Bogota')       AS FECHA_CREACION,
+DATE(CRM_HUBSPOT_DEAL_CLOSE_DTTM,'America/Bogota')        AS FECHA_CIERRE,
+CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND                         AS INBOUND_OUTBOUND,
+CRM_HUBSPOT_PIPELINE_LABEL                                AS CRM_HUBSPOT_PIPELINE_LABEL,
+CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL                     AS CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                AS CRM_HUBSPOT_OWNER_EMAIL,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                            AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                     AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+CONCAT(DE.CRM_HUBSPOT_DEAL_EMAIL,'SHIPKRAKEN')            AS LLAVE,
+ROW_NUMBER() OVER (PARTITION BY DE.CRM_HUBSPOT_DEAL_EMAIL ORDER BY DE.CRM_HUBSPOT_DEAL_CREATE_DTTM DESC) AS row_num
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW ON DE.CRM_HUBSPOT_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINES` PI ON DE.CRM_HUBSPOT_PIPELINE_ID = PI.CRM_HUBSPOT_PIPELINE_ID
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_PIPELINE_STAGE` PS ON DE.CRM_HUBSPOT_PIPELINE_STAGE_ID = PS.CRM_HUBSPOT_PIPELINE_STAGE_ID
+WHERE CRM_HUBSPOT_PIPELINE_LABEL = 'Comercial Colombia'
+AND CRM_HUBSPOT_PIPELINE_STAGE_STAGELABEL IN ('Cliente Activo','Ganado','Cliente con envío','Cliente con envío','Reactivado, Recuperado','Cliente con Depósito')
+--WHERE CAST(DE.CRM_HUBSPOT_DEAL_ID AS STRING) = '32299296366'
+)
+SELECT
+*
+FROM NEGOCIOS
+WHERE row_num = 1
+)
+),
+
+COMERCIAL_CONTACTO AS (
+WITH COMERCIAL AS (
+SELECT
+CRM_HUBSPOT_CONTACT_EMAIL                                         AS CUS_CUSTOMER_HEAD_ID,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                        AS COMERCIAL_CONTACTO,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                                    AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                             AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+ROW_NUMBER() OVER (PARTITION BY CRM_HUBSPOT_CONTACT_EMAIL ORDER BY CRM_HUBSPOT_CONTACT_HB_OWNER_ASSIGNED_DTTM DESC) AS rn
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_CONTACTS` CT
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW
+ON CT.CRM_HUBSPOT_CONTACT_HB_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST
+ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+)
+------------------------------------------------------------------- Comercial contacto
+SELECT
+DISTINCT CUS_CUSTOMER_HEAD_ID                                     AS CUS_CUSTOMER_HEAD_ID,
+CONCAT(CUS_CUSTOMER_HEAD_ID,'SHIPKRAKEN')                         AS LLAVE,
+COMERCIAL_CONTACTO                                                AS CRM_HUBSPOT_OWNER_EMAIL,
+CRM_HUBSPOT_OWNER_TEAMS                                           AS CRM_HUBSPOT_OWNER_TEAMS,
+HIE_HIERARCHY_SALES_UNGROUPED_TEAM                                AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM
+
+FROM COMERCIAL
+WHERE rn = 1
+),
+
+COMERCIAL_FRENET AS (
+WITH COMERCIAL AS (
+SELECT
+CRM_HUBSPOT_CONTACT_EMAIL                                         AS CRM_HUBSPOT_CONTACT_EMAIL,
+OW.CRM_HUBSPOT_OWNER_EMAIL                                        AS COMERCIAL_CONTACTO,
+ST.HIE_HIERARCHY_SALES_TEAM_TL                                    AS CRM_HUBSPOT_OWNER_TEAMS,
+ST.HIE_HIERARCHY_SALES_UNGROUPED_TEAM                             AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+ROW_NUMBER() OVER (PARTITION BY CRM_HUBSPOT_CONTACT_EMAIL ORDER BY CRM_HUBSPOT_CONTACT_HB_OWNER_ASSIGNED_DTTM DESC) AS rn
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_CONTACTS` CT
+LEFT JOIN `eblalake.NABU.LK_CRM_HUBSPOT_OWNERS` OW
+ON CT.CRM_HUBSPOT_CONTACT_HB_OWNER_ID = OW.CRM_HUBSPOT_OWNER_ID
+LEFT JOIN `eblalake.NABU.LK_HIE_HIERARCHY_SALES_TEAM` ST
+ON OW.CRM_HUBSPOT_OWNER_EMAIL = ST.CRM_HUBSPOT_OWNER_EMAIL
+WHERE CT.COU_COUNTRY_NAME = 'Brasil'
+)
+------------------------------------------------------------------- Comercial contacto
+SELECT
+DISTINCT CRM_HUBSPOT_CONTACT_EMAIL                                AS CRM_HUBSPOT_CONTACT_EMAIL,
+CONCAT(CRM_HUBSPOT_CONTACT_EMAIL,'FRENET')                        AS LLAVE,
+COMERCIAL_CONTACTO                                                AS CRM_HUBSPOT_OWNER_EMAIL,
+CRM_HUBSPOT_OWNER_TEAMS                                           AS CRM_HUBSPOT_OWNER_TEAMS,
+HIE_HIERARCHY_SALES_UNGROUPED_TEAM                                AS HIE_HIERARCHY_SALES_UNGROUPED_TEAM
+
+FROM COMERCIAL
+WHERE rn = 1
+),
+
+----------------------------------------------------------------------------------------- INBOUND/OUTBOUND/TAG/SUBTAG
+INBOUND_OUTBOUND AS (
+
+SELECT
+CRM_HUBSPOT_CONTACT_EMAIL                                         AS CUS_CUSTOMER_HEAD_EMAIL,
+LLAVE                                                             AS LLAVE,
+'Outbound'                                                        AS INBOUND_OUTBOUND,
+CAST(NULL AS STRING)                                              AS TAG,
+CAST(NULL AS STRING)                                              AS SUB_TAG,
+FROM COMERCIAL_FRENET
+
+UNION ALL
+
+SELECT
+DISTINCT CT.CRM_HUBSPOT_CONTACT_EMAIL                             AS CUS_CUSTOMER_HEAD_EMAIL,
+CONCAT(CT.CRM_HUBSPOT_CONTACT_EMAIL, 'SHIPKRAKEN')                AS LLAVE,
+IFNULL(
+  ARRAY_AGG(CT.CRM_HUBSPOT_CONTACT_INBOUND_OUTBOUND IGNORE NULLS ORDER BY CT.CRM_HUBSPOT_CONTACT_CREATE_DTTM ASC)[SAFE_OFFSET(0)],
+  'Outbound'
+)                                                                 AS INBOUND_OUTBOUND,
+ARRAY_AGG(CT.CRM_HUBSPOT_CONTACT_TAG IGNORE NULLS ORDER BY CT.CRM_HUBSPOT_CONTACT_CREATE_DTTM ASC)[SAFE_OFFSET(0)] AS TAG,
+ARRAY_AGG(CT.CRM_HUBSPOT_CONTACT_SUBTAG IGNORE NULLS ORDER BY CT.CRM_HUBSPOT_CONTACT_CREATE_DTTM ASC)[SAFE_OFFSET(0)] AS SUB_TAG
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_CONTACTS` CT
+WHERE CT.CRM_HUBSPOT_CONTACT_EMAIL NOT LIKE '%@skydropx.com%'
+AND CT.CRM_HUBSPOT_CONTACT_EMAIL NOT LIKE '%@soloenvios.com%'
+GROUP BY 1,2
+
+UNION ALL
+
+SELECT
+DISTINCT CRM_HUBSPOT_DEAL_EMAIL                                   AS CUS_CUSTOMER_HEAD_EMAIL,
+CONCAT(CRM_HUBSPOT_DEAL_EMAIL, 'SOLO_ENVIOS')                     AS LLAVE,
+IFNULL(
+  ARRAY_AGG(CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_SOLO_ENVIOS IGNORE NULLS ORDER BY CRM_HUBSPOT_DEAL_CREATE_DTTM ASC)[SAFE_OFFSET(0)],
+  'Outbound'
+)                                                                 AS INBOUND_OUTBOUND,
+CAST(NULL AS STRING)                                              AS TAG,
+CAST(NULL AS STRING)                                              AS SUB_TAG,
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+WHERE CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@skydropx.com%'
+AND CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@soloenvios.com%'
+AND CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_SOLO_ENVIOS IS NOT NULL
+GROUP BY 1,2
+
+UNION ALL
+
+SELECT
+DISTINCT CRM_HUBSPOT_DEAL_EMAIL                                   AS CUS_CUSTOMER_HEAD_EMAIL,
+CONCAT(CRM_HUBSPOT_DEAL_EMAIL, 'ENVIOS_INTERNACIONALES')          AS LLAVE,
+IFNULL(
+  ARRAY_AGG(CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_ENVIOS_INTERNACIONAL IGNORE NULLS ORDER BY CRM_HUBSPOT_DEAL_CREATE_DTTM ASC)[SAFE_OFFSET(0)],
+  'Outbound'
+)                                                                 AS INBOUND_OUTBOUND,
+CAST(NULL AS STRING)                                              AS TAG,
+CAST(NULL AS STRING)                                              AS SUB_TAG,
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+WHERE CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@skydropx.com%'
+AND CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@soloenvios.com%'
+AND CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_ENVIOS_INTERNACIONAL IS NOT NULL
+GROUP BY 1,2
+
+UNION ALL
+
+SELECT
+DISTINCT CRM_HUBSPOT_DEAL_EMAIL                                   AS CUS_CUSTOMER_HEAD_EMAIL,
+CONCAT(CRM_HUBSPOT_DEAL_EMAIL, 'SKYDROPX_PRO')                    AS LLAVE,
+IFNULL(
+  ARRAY_AGG(CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_SKYDROPX_PRO IGNORE NULLS ORDER BY CRM_HUBSPOT_DEAL_CREATE_DTTM ASC)[SAFE_OFFSET(0)],
+  'Outbound'
+)                                                                 AS INBOUND_OUTBOUND,
+CAST(NULL AS STRING)                                              AS TAG,
+CAST(NULL AS STRING)                                              AS SUB_TAG,
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_DEALS` DE
+WHERE CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@skydropx.com%'
+AND CRM_HUBSPOT_DEAL_EMAIL NOT LIKE '%@soloenvios.com%'
+AND CRM_HUBSPOT_DEAL_INBOUND_OUTBOUND_SKYDROPX_PRO IS NOT NULL
+GROUP BY 1,2
+
+),
+----------------------------------------------------------------------------------------- NOMBRE DE LA EMPRESA
+EMPRESA AS (
+SELECT
+DISTINCT CRM_HUBSPOT_COMPANY_HEADQUARTER_EMAIL                    AS CRM_HUBSPOT_COMPANY_HEADQUARTER_EMAIL,
+CONCAT(CRM_HUBSPOT_COMPANY_HEADQUARTER_EMAIL, 'SHIPKRAKEN')       AS LLAVE,
+IFNULL(
+  ARRAY_AGG(CRM_HUBSPOT_COMPANY_NAME IGNORE NULLS ORDER BY CRM_HUBSPOT_COMPANY_CREATED_AT_DTTM ASC)[SAFE_OFFSET(0)],
+  'Outbound'
+)                                                                 AS EMPRESA,
+
+FROM `eblalake.NABU.LK_CRM_HUBSPOT_COMPANIES`
+WHERE CRM_HUBSPOT_COMPANY_HEADQUARTER_EMAIL NOT LIKE '%@skydropx.com%'
+AND CRM_HUBSPOT_COMPANY_HEADQUARTER_EMAIL NOT LIKE '%@soloenvios.com%'
+GROUP BY 1
+),
+
+PRE_FINAL AS (
+SELECT
+SHP_LABEL_ID,
+FECHA_GUIA,
+ULTIMA_ACTUALIZACION_CO,
+ULTIMA_ACTUALIZACION_MX,
+SHP_TRACKING_NUMBER,
+CAR_CARRIER_NAME,
+CAR_CARRIER_SERVICE_NAME,
+SHP_SHIPMENT_TOTAL_UNITS,
+ENVIO,
+GUIA_CON_SEGURO,
+NET_REVENUE,
+NET_REVENUE_REAL                                                    AS NET_REVENUE_REAL,
+NET_REVENUE_PREDICTIVO                                              AS NET_REVENUE_PREDICTIVO,
+NET_REVENUE_SIN_SEGURO                                              AS NET_REVENUE_SIN_SEGURO,
+ORIGEN,
+E.EMPRESA,
+P.CUS_CUSTOMER_HEAD_ID,
+P.CUS_CUSTOMER_HEAD_EMAIL,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' AND R.CRM_HUBSPOT_OWNER_EMAIL IS NOT NULL THEN R.CRM_HUBSPOT_OWNER_EMAIL
+WHEN COU_COUNTRY_CODE = 'CO' THEN CC.CRM_HUBSPOT_OWNER_EMAIL ELSE C.CRM_HUBSPOT_OWNER_EMAIL END AS CRM_HUBSPOT_OWNER_EMAIL,
+CASE
+WHEN COU_COUNTRY_CODE = 'MX' AND R.CRM_HUBSPOT_OWNER_TEAMS IS NOT NULL THEN R.CRM_HUBSPOT_OWNER_TEAMS
+WHEN COU_COUNTRY_CODE = 'CO' THEN CC.CRM_HUBSPOT_OWNER_TEAMS ELSE C.CRM_HUBSPOT_OWNER_TEAMS END AS CRM_HUBSPOT_OWNER_TEAMS,
+C.HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+TIPO_DE_CLIENTE,
+CASE
+WHEN IO.INBOUND_OUTBOUND IS NOT NULL THEN IO.INBOUND_OUTBOUND ELSE C.INBOUND_OUTBOUND END AS INBOUND_OUTBOUND,
+TAG,
+SUB_TAG,
+R.COHORT_RECUPERADO,
+R.ENVIOS_30_DAY_RECUPERADOS,
+CASE
+WHEN P.BU_BUSINESS_TAG IS NULL THEN BU_BUSINESS_TAG_GENERAL ELSE P.BU_BUSINESS_TAG END AS BU_BUSINESS_TAG,
+BU_BUSINESS_TAG_GENERAL,
+COU_COUNTRY_CODE,
+FECHA_CREACION_CUENTA,
+FECHA_PRIMER_DEPOSITO,
+PRIMER_ENVIO,
+PRIMER_ENVIO_VENTAS_GENERAL,
+PRIMER_ENVIO_VENTAS_NEGOCIO,
+P.PRIMER_ENVIO_REACTIVADO,
+PRIMER_ENVIO_POR_NEGOCIO_GENERAL,
+PRIMER_ENVIO_POR_NEGOCIO,
+ULTIMO_ENVIO_POR_NEGOCIO,
+ULTIMO_ENVIO_POR_NEGOCIO_GENERAL,
+IF(FECHA_GUIA BETWEEN PRIMER_ENVIO_VENTAS_GENERAL AND LAST_DAY(PRIMER_ENVIO_VENTAS_GENERAL), 1 * SHP_SHIPMENT_TOTAL_UNITS , 0)            AS ENVIO_COHORT_VENTAS, --51.Se valida si el envio es envio nuevo entre todos los envios de plataformas
+ENVIO_COHORT_GENERAL,
+ENVIO_COHORT_BU,
+ENVIO_COHORT,
+FIN_30_DIAS_GENERAL,
+FIN_30_DIAS_BU,
+FIN_30_DIAS,
+ENVIOS_30_DIAS_GENERAL,
+ENVIOS_30_DIAS_BU,
+ENVIOS_30_DIAS,
+--SUMA_DEPOSITOS_30_DIAS AS DEPOSITOS_30_DIAS_SE,
+CASE
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN FECHA_GUIA < DATE_ADD (PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END       AS ENVIOS_30_DIAS_VENTAS, -- Se valida si el envio es de 30 dias de todas las plataformas todas las 
+CASE
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN CASE
+WHEN IO.INBOUND_OUTBOUND IS NOT NULL THEN IO.INBOUND_OUTBOUND ELSE C.INBOUND_OUTBOUND END = 'Inbound' AND UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) NOT LIKE '%LTL%' AND UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) NOT LIKE '%INTERNATIONAL%' AND FECHA_GUIA < DATE_ADD (PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END       AS ENVIOS_INBOUND_30_DIAS,
+CASE
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN CASE
+WHEN IO.INBOUND_OUTBOUND IS NOT NULL THEN IO.INBOUND_OUTBOUND ELSE C.INBOUND_OUTBOUND END = 'Outbound' AND UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) NOT LIKE '%LTL%' AND UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) NOT LIKE '%INTERNATIONAL%' AND FECHA_GUIA < DATE_ADD (PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END     AS ENVIOS_OUTBOUND_30_DIAS,
+CASE
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN CASE
+WHEN IO.INBOUND_OUTBOUND IS NOT NULL THEN IO.INBOUND_OUTBOUND ELSE C.INBOUND_OUTBOUND END IS NULL AND FECHA_GUIA < DATE_ADD (PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY) THEN 1 * SHP_SHIPMENT_TOTAL_UNITS  ELSE 0 END     AS ENVIOS_OTROS_30_DIAS,
+CASE 
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) LIKE '%LTL%' AND (FECHA_GUIA <= DATE_ADD(PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY)) THEN 1 ELSE 0 END   AS LTL_30_DIAS, --58 30 dias LTL
+CASE 
+WHEN FECHA_GUIA < PRIMER_ENVIO_VENTAS_GENERAL THEN 0
+WHEN UPPER(IFNULL(CAR_CARRIER_SERVICE_NAME, '')) LIKE '%INTERNATIONAL%' AND (FECHA_GUIA <= DATE_ADD(PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 30 DAY)) THEN 1 ELSE 0 END AS INTERNACIONAL_30_DIAS, --59 30 dias INTERNACIONAL
+CASE
+WHEN COU_COUNTRY_CODE = 'BR' THEN FALSE
+WHEN BLACKLIST IS NULL THEN FALSE ELSE
+BLACKLIST END AS BLACKLIST
+
+FROM PRIMEROS_DATOS_VENTAS P
+LEFT JOIN COMERCIAL C
+ON CONCAT(P.CUS_CUSTOMER_HEAD_EMAIL,P.BU_BUSINESS_TAG_GENERAL) = C.LLAVE
+LEFT JOIN COMERCIAL_CONTACTO CC
+ON CONCAT(P.CUS_CUSTOMER_HEAD_EMAIL,P.BU_BUSINESS_TAG_GENERAL) = CC.LLAVE
+LEFT JOIN REACTIVADOS_SKYDROPX R
+ON CONCAT(P.CUS_CUSTOMER_HEAD_EMAIL,P.BU_BUSINESS_TAG_GENERAL) = R.LLAVE
+LEFT JOIN INBOUND_OUTBOUND IO
+ON CONCAT(P.CUS_CUSTOMER_HEAD_EMAIL,P.BU_BUSINESS_TAG_GENERAL) = IO.LLAVE
+LEFT JOIN EMPRESA E
+ON CONCAT(P.CUS_CUSTOMER_HEAD_EMAIL,P.BU_BUSINESS_TAG_GENERAL) = E.LLAVE
+),
+
+ENVIO AS (
+SELECT 
+*,
+ -- Nuevo contador que inicia desde PRIMER_ENVIO_VENTAS_GENERAL
+SUM(
+CASE 
+WHEN FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN 1 
+ELSE 0 END
+) OVER (
+PARTITION BY CUS_CUSTOMER_HEAD_EMAIL 
+ORDER BY FECHA_GUIA 
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS CONTADOR_COHORT_DESDE_PRIMER_ENVIO,
+CASE 
+  WHEN FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL 
+  THEN ROW_NUMBER() OVER (
+    PARTITION BY CUS_CUSTOMER_HEAD_EMAIL 
+    ORDER BY FECHA_GUIA, SHP_LABEL_ID
+  ) 
+END AS CONTADOR_COHORT_DESDE_PRIMER_ENVIO_2,
+
+SUM(
+CASE 
+WHEN FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN 1 
+ELSE 0 END
+) OVER (
+PARTITION BY CUS_CUSTOMER_HEAD_EMAIL 
+ORDER BY FECHA_GUIA 
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS CUENTA_ENVIOS_30_DIAS_VENTAS,
+CONCAT(CUS_CUSTOMER_HEAD_EMAIL,BU_BUSINESS_TAG_GENERAL) AS LLAVE_CLIENTE,
+DATE_TRUNC(DATE_ADD(PRIMER_ENVIO_VENTAS_GENERAL, INTERVAL 1 MONTH), MONTH)     AS INICIO_30_DIAS
+FROM PRE_FINAL
+ORDER BY FECHA_GUIA ASC
+),
+
+CONTADOR AS (
+SELECT 
+*,
+--CASE
+--WHEN TIPO_DE_CLIENTE = 'Recuperado' AND FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL AND FECHA_GUIA <= LAST_DAY(PRIMER_ENVIO_VENTAS_GENERAL, MONTH) THEN 1
+--WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIO_COHORT_VENTAS ELSE 0 END AS ENVIO_COHORT_VENTAS_P,
+CASE
+  WHEN ENVIO_COHORT_VENTAS >= 1 AND FECHA_GUIA < INICIO_30_DIAS THEN PRIMER_ENVIO_VENTAS_GENERAL
+  WHEN ENVIOS_30_DIAS_VENTAS >= 1 AND FECHA_GUIA >= INICIO_30_DIAS AND FECHA_GUIA <=  FIN_30_DIAS_GENERAL THEN INICIO_30_DIAS END              AS FECHA_PARA_COMISIONES,
+ROW_NUMBER() OVER (PARTITION BY LLAVE_CLIENTE ORDER BY CASE WHEN FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN 1 ELSE NULL END DESC, FECHA_GUIA ASC) AS RowNum,
+FROM ENVIO
+),
+
+OKR_ACTUAL AS (
+WITH date_ranges AS (
+SELECT
+DATE_TRUNC(CURRENT_DATE(), MONTH) AS start_date,
+CURRENT_DATE() AS end_date
+)
+SELECT 
+CRM_HUBSPOT_OWNER_EMAIL AS COMERCIAL_P,
+SUM(ENVIO_COHORT_VENTAS) AS COHORT_ACTUAL,
+SUM(ENVIOS_30_DIAS_VENTAS) AS _30_DIAS_ACTUAL,
+SUM(
+CASE 
+  WHEN RowNum = 1 AND FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN 1 ELSE NULL END
+) AS ACTIVOS_ACTUAL
+FROM CONTADOR
+WHERE FECHA_GUIA BETWEEN (SELECT start_date FROM date_ranges) AND (SELECT end_date FROM date_ranges)
+GROUP BY 1
+),
+
+PROM_3_MESES AS (
+WITH date_ranges AS (
+SELECT
+DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH), MONTH) AS start_date,
+LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH) AS end_date
+)
+SELECT 
+CRM_HUBSPOT_OWNER_EMAIL AS COMERCIAL_P,
+SUM(ENVIO_COHORT_VENTAS) AS PROM_COHORT,
+SUM(ENVIOS_30_DIAS_VENTAS) AS PROM_30_DAY,
+/*SUM(
+CASE 
+  WHEN RowNum = 1 AND DATE_LABEL >= FIRST_LABEL THEN 1 ELSE NULL END
+) AS PROM_ACTIVOS*/
+COUNT( DISTINCT
+  CASE 
+    WHEN RowNum = 1 AND FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN CUS_CUSTOMER_HEAD_ID ELSE NULL 
+  END
+) AS PROM_ACTIVOS
+FROM CONTADOR
+WHERE FECHA_GUIA BETWEEN (SELECT start_date FROM date_ranges) AND (SELECT end_date FROM date_ranges)
+GROUP BY 1
+)
+
+
+SELECT
+SHP_LABEL_ID,
+FECHA_GUIA,
+SHP_TRACKING_NUMBER,
+CAR_CARRIER_NAME,
+CAR_CARRIER_SERVICE_NAME,
+SHP_SHIPMENT_TOTAL_UNITS,
+ENVIO,
+GUIA_CON_SEGURO,
+NET_REVENUE,
+NET_REVENUE_REAL                                                    AS NET_REVENUE_REAL,
+NET_REVENUE_PREDICTIVO                                              AS NET_REVENUE_PREDICTIVO,
+NET_REVENUE_SIN_SEGURO                                              AS NET_REVENUE_SIN_SEGURO,
+ORIGEN,
+EMPRESA,
+CONCAT(CUS_CUSTOMER_HEAD_EMAIL,BU_BUSINESS_TAG) AS LLAVE,
+CUS_CUSTOMER_HEAD_ID AS CUS_CUSTOMER_HEAD_ID,
+CUS_CUSTOMER_HEAD_EMAIL,
+CRM_HUBSPOT_OWNER_EMAIL,
+CASE
+WHEN CUS_CUSTOMER_HEAD_EMAIL IN('lavandastoreaccesorios@gmail.com','sebastianbn26@gmail.com', 'lavandastoreaccesorios@gmail.com', 'santiguzman55@gmail.com', 'infobudoo@gmail.com', 'lookzury@gmail.com', 'paolaroseroe0@gmail.com', 'tecnoloys@gmail.com', 'narinosurcelsas@hotmail.com', 'antoniodjm@hotmail.com', 'escarabajo46@hotmail.com', 'info@ecommercefactory.co', 'multitiendacolombiasas@gmail.com', 'ocobos@sensal.co', 'by.cloeh2025@gmail.com', 'munozlady69@gmail.com', 'paola08yz@gmail.com') THEN 'Juan Carlos Alfonso Joya' ELSE 
+CRM_HUBSPOT_OWNER_TEAMS END AS CRM_HUBSPOT_OWNER_TEAMS,
+HIE_HIERARCHY_SALES_UNGROUPED_TEAM,
+TIPO_DE_CLIENTE,
+INBOUND_OUTBOUND,
+TAG,
+SUB_TAG,
+BU_BUSINESS_TAG,
+BU_BUSINESS_TAG_GENERAL,
+COU_COUNTRY_CODE,
+FECHA_CREACION_CUENTA,
+FECHA_PRIMER_DEPOSITO,
+PRIMER_ENVIO,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN NULL ELSE
+PRIMER_ENVIO_VENTAS_GENERAL END AS PRIMER_ENVIO_VENTAS_GENERAL,
+PRIMER_ENVIO_VENTAS_NEGOCIO,
+PRIMER_ENVIO_REACTIVADO,
+PRIMER_ENVIO_POR_NEGOCIO_GENERAL,
+PRIMER_ENVIO_POR_NEGOCIO,
+ULTIMO_ENVIO_POR_NEGOCIO,
+ULTIMO_ENVIO_POR_NEGOCIO_GENERAL,
+FIN_30_DIAS_GENERAL,
+FIN_30_DIAS_BU,
+FIN_30_DIAS,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN 0
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= COHORT_RECUPERADO THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIO_COHORT_VENTAS ELSE 0 END AS ENVIO_COHORT_VENTAS,
+RowNum,
+COHORT_RECUPERADO,
+ENVIO_COHORT_GENERAL,
+ENVIO_COHORT_BU,
+ENVIO_COHORT,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN 0
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIOS_30_DIAS_VENTAS ELSE 0 END AS ENVIOS_30_DIAS_VENTAS,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN 0
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIOS_INBOUND_30_DIAS ELSE 0 END AS ENVIOS_INBOUND_30_DIAS_VENTAS,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN 0
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIOS_OTROS_30_DIAS ELSE 0 END AS ENVIOS_OTROS_30_DIAS,
+CASE
+WHEN BU_BUSINESS_TAG = 'FRENET' AND PRIMER_ENVIO_VENTAS_GENERAL >= '2024-01-01' AND PRIMER_ENVIO_VENTAS_GENERAL <= '2024-01-31' THEN 0
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN ENVIOS_OUTBOUND_30_DIAS ELSE 0 END AS ENVIOS_OUTBOUND_30_DIAS_VENTAS,
+CASE
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN LTL_30_DIAS ELSE 0 END AS LTL_30_DIAS,
+CASE
+WHEN TIPO_DE_CLIENTE = 'Recuperado' AND RowNum >= 1 AND RowNum <= ENVIOS_30_DAY_RECUPERADOS THEN 1
+WHEN TIPO_DE_CLIENTE <> 'Recuperado' THEN INTERNACIONAL_30_DIAS ELSE 0 END AS INTERNACIONAL_30_DIAS,
+ENVIOS_30_DAY_RECUPERADOS,
+ENVIOS_30_DIAS_GENERAL,
+ENVIOS_30_DIAS_BU,
+ENVIOS_30_DIAS,
+BLACKLIST,
+INICIO_30_DIAS,
+ROUND(PROM_COHORT/3,0) AS PROM_COHORT,
+ROUND(PROM_30_DAY/3,0) AS PROM_30_DAY,
+COHORT_ACTUAL,
+_30_DIAS_ACTUAL,
+ACTIVOS_ACTUAL,
+ROUND(PROM_ACTIVOS/3,0) AS PROM_ACTIVOS,
+IFNULL(META_DEPOSITOS,0) AS META_DEPOSITOS,
+IFNULL(META_ACTIVOS,0) AS META_ACTIVOS,
+IFNULL(META_COHORT,0) AS META_COHORT,
+IFNULL(META_30_DIAS,0) AS META_30_DIAS,
+IFNULL(META_REFERIDOS,0) AS META_REFERIDOS,
+IFNULL(META_CALIDAD,0) AS META_CALIDAD,
+ROUND((COHORT_ACTUAL / NULLIF(META_COHORT, 0)) * 100, 1) AS CUMPLIMIENTO_COHORT,
+ROUND((_30_DIAS_ACTUAL / NULLIF(META_30_DIAS, 0)) * 100, 1) AS CUMPLIMIENTO_30_DIAS,
+CASE
+WHEN FECHA_PARA_COMISIONES IS NULL THEN FECHA_PARA_COMISIONES ELSE FECHA_PARA_COMISIONES END AS FECHA_PARA_COMISIONES,
+CASE 
+  WHEN RowNum = 1 AND FECHA_GUIA >= PRIMER_ENVIO_VENTAS_GENERAL THEN 1 ELSE NULL END  AS CON_PRIMER_ENVIO,
+ULTIMA_ACTUALIZACION_CO,
+ULTIMA_ACTUALIZACION_MX,
+
+FROM CONTADOR C
+LEFT JOIN PROM_3_MESES P
+ON C.CRM_HUBSPOT_OWNER_EMAIL = P.COMERCIAL_P
+LEFT JOIN OKR_ACTUAL A
+ON C.CRM_HUBSPOT_OWNER_EMAIL = A.COMERCIAL_P
+LEFT JOIN `dev-eblalake-core-analytics.TBL.METAS_OWNERS` M
+ON C.CRM_HUBSPOT_OWNER_EMAIL = M.COMERCIAL
+--WHERE CUS_CUSTOMER_HEAD_EMAIL = 'fercho170787@hotmail.com'
